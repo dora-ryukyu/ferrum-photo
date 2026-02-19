@@ -36,7 +36,7 @@ struct DevelopParams {
 
 // ─── Demosaic Compute Shader (MHC Algorithm) ─────────────────
 // Malvar-He-Cutler demosaicing using 5×5 directional kernels.
-// Provides superior edge reconstruction vs bilinear.
+// Corrected coefficients from the original 2004 paper.
 
 @group(0) @binding(0) var<storage, read> raw_data: array<u32>;
 @group(0) @binding(1) var output_tex: texture_storage_2d<rgba16float, write>;
@@ -75,6 +75,13 @@ fn sn(x: i32, y: i32) -> f32 {
   return normalize(read_raw(idx), color);
 }
 
+// Check if the CFA position at (x,y) is a given color, using signed coords
+fn is_color(x: i32, y: i32, c: u32) -> bool {
+  let cx = u32(clamp(x, 0, i32(raw_params.width) - 1));
+  let cy = u32(clamp(y, 0, i32(raw_params.height) - 1));
+  return cfa_color(cx, cy) == c;
+}
+
 @compute @workgroup_size(8, 8)
 fn demosaic_bayer(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= raw_params.width || gid.y >= raw_params.height) {
@@ -84,9 +91,8 @@ fn demosaic_bayer(@builtin(global_invocation_id) gid: vec3u) {
   let x = i32(gid.x);
   let y = i32(gid.y);
   let color = cfa_color(gid.x, gid.y);
-  let C = sn(x, y);  // center pixel
+  let C = sn(x, y);
 
-  // Load the 5×5 neighborhood (only needed values for MHC)
   // Cardinal neighbors
   let N1 = sn(x, y - 1);
   let S1 = sn(x, y + 1);
@@ -108,49 +114,50 @@ fn demosaic_bayer(@builtin(global_invocation_id) gid: vec3u) {
   var b: f32;
 
   // MHC kernels (Malvar, He, Cutler 2004)
-  // The key insight: use the center pixel's color channel as a
-  // gradient guide to interpolate missing channels.
+  // Kernel coefficients from the paper (÷8):
+  //
+  // G at R/B:   [0,0,-1,0,0 / 0,0,2,0,0 / -1,2,4,2,-1 / 0,0,2,0,0 / 0,0,-1,0,0]
+  //   → G = (4*C + 2*(N+S+E+W) - (N2+S2+E2+W2)) / 8
+  //
+  // R at B (or B at R):  [0,0,-3,0,0 / 0,4,0,4,0 / -3,0,12,0,-3 / 0,4,0,4,0 / 0,0,-3,0,0] ÷16
+  //   → val = (12*C + 4*(NW+NE+SW+SE) - 3*(N2+S2+E2+W2)) / 16
+  //
+  // R at G in R-row: [0,0,0.5,0,0 / 0,-1,0,-1,0 / -1,4,5,4,-1 / 0,-1,0,-1,0 / 0,0,0.5,0,0] ÷8
+  //   → R = (5*C + 4*(W+E) - (NW+NE+SW+SE) - (W2+E2) + 0.5*(N2+S2)) / 8
 
   switch (color) {
     case 0u: {
       // ── Red pixel: have R, interpolate G and B ──
       r = C;
-      // G at R: gradient-corrected average of 4 cardinal G neighbors
-      g = 0.25 * (N1 + S1 + W1 + E1)
-        + 0.125 * (2.0 * C - N2 - S2 - W2 - E2);
-      // B at R: gradient-corrected average of 4 diagonal B neighbors
-      b = 0.25 * (NW + NE + SW + SE)
-        + 0.1875 * (2.0 * C - N2 - S2 - W2 - E2);
+      // G at R location
+      g = (4.0 * C + 2.0 * (N1 + S1 + W1 + E1) - (N2 + S2 + W2 + E2)) / 8.0;
+      // B at R location
+      b = (12.0 * C + 4.0 * (NW + NE + SW + SE) - 3.0 * (N2 + S2 + W2 + E2)) / 16.0;
     }
     case 2u: {
       // ── Blue pixel: have B, interpolate G and R ──
       b = C;
-      // G at B: same kernel as G at R
-      g = 0.25 * (N1 + S1 + W1 + E1)
-        + 0.125 * (2.0 * C - N2 - S2 - W2 - E2);
-      // R at B: same kernel as B at R
-      r = 0.25 * (NW + NE + SW + SE)
-        + 0.1875 * (2.0 * C - N2 - S2 - W2 - E2);
+      // G at B location (same kernel as G at R)
+      g = (4.0 * C + 2.0 * (N1 + S1 + W1 + E1) - (N2 + S2 + W2 + E2)) / 8.0;
+      // R at B location (same kernel as B at R)
+      r = (12.0 * C + 4.0 * (NW + NE + SW + SE) - 3.0 * (N2 + S2 + W2 + E2)) / 16.0;
     }
     case 1u: {
       // ── Green pixel: have G, interpolate R and B ──
       g = C;
-      // Determine if this green is on a red row or blue row
-      let is_red_row = (cfa_color(gid.x, gid.y - 1u) == 0u) ||
-                       (cfa_color(gid.x, gid.y + 1u) == 0u);
 
-      if (is_red_row) {
-        // Red is above/below, Blue is left/right
-        r = 0.5 * (N1 + S1)
-          + 0.25 * (2.0 * C - N2 - S2);
-        b = 0.5 * (W1 + E1)
-          + 0.25 * (2.0 * C - W2 - E2);
+      // Determine if R neighbors are above/below or left/right
+      // Use signed coords to avoid u32 underflow
+      let r_above_below = is_color(x, y - 1, 0u) || is_color(x, y + 1, 0u);
+
+      if (r_above_below) {
+        // R is above/below → interpolate R vertically, B horizontally
+        r = (5.0 * C + 4.0 * (N1 + S1) - (NW + NE + SW + SE) - (N2 + S2) + 0.5 * (W2 + E2)) / 8.0;
+        b = (5.0 * C + 4.0 * (W1 + E1) - (NW + NE + SW + SE) - (W2 + E2) + 0.5 * (N2 + S2)) / 8.0;
       } else {
-        // Blue is above/below, Red is left/right
-        b = 0.5 * (N1 + S1)
-          + 0.25 * (2.0 * C - N2 - S2);
-        r = 0.5 * (W1 + E1)
-          + 0.25 * (2.0 * C - W2 - E2);
+        // R is left/right → interpolate R horizontally, B vertically
+        r = (5.0 * C + 4.0 * (W1 + E1) - (NW + NE + SW + SE) - (W2 + E2) + 0.5 * (N2 + S2)) / 8.0;
+        b = (5.0 * C + 4.0 * (N1 + S1) - (NW + NE + SW + SE) - (N2 + S2) + 0.5 * (W2 + E2)) / 8.0;
       }
     }
     default: {
@@ -158,7 +165,6 @@ fn demosaic_bayer(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
 
-  // Clamp to [0,1] after interpolation (MHC can produce negatives)
   r = clamp(r, 0.0, 1.0);
   g = clamp(g, 0.0, 1.0);
   b = clamp(b, 0.0, 1.0);
@@ -172,7 +178,6 @@ fn demosaic_bayer(@builtin(global_invocation_id) gid: vec3u) {
 @group(0) @binding(1) var dev_output: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(2) var<uniform> develop: DevelopParams;
 
-// sRGB gamma from linear
 fn linear_to_srgb(c: f32) -> f32 {
   if (c <= 0.0031308) {
     return c * 12.92;
@@ -180,7 +185,6 @@ fn linear_to_srgb(c: f32) -> f32 {
   return 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
-// Highlights / shadows tone mapping
 fn tone_adjust(val: f32, highlights: f32, shadows: f32) -> f32 {
   var v = val;
   if (shadows != 0.0) {
@@ -231,7 +235,6 @@ fn hue_to_rgb(p: f32, q: f32, t_in: f32) -> f32 {
   return p;
 }
 
-// HSL → RGB
 fn hsl_to_rgb(hsl: vec3f) -> vec3f {
   if (hsl.y < 0.00001) {
     return vec3f(hsl.z, hsl.z, hsl.z);
@@ -283,17 +286,15 @@ fn develop_image(@builtin(global_invocation_id) gid: vec3u) {
   g = tone_adjust(g, develop.highlights, develop.shadows);
   b = tone_adjust(b, develop.highlights, develop.shadows);
 
-  // 5. Vibrance & Saturation (in HSL space)
+  // 5. Vibrance & Saturation (HSL space)
   if (develop.vibrance != 0.0 || develop.saturation != 0.0) {
     var hsl = rgb_to_hsl(vec3f(r, g, b));
 
-    // Vibrance: boost less-saturated colors more (perceptual)
     if (develop.vibrance != 0.0) {
       let boost = develop.vibrance * (1.0 - hsl.y) * 0.5;
       hsl.y = clamp(hsl.y + boost, 0.0, 1.0);
     }
 
-    // Saturation: uniform adjustment
     if (develop.saturation != 0.0) {
       hsl.y = clamp(hsl.y * (1.0 + develop.saturation), 0.0, 1.0);
     }
@@ -304,15 +305,13 @@ fn develop_image(@builtin(global_invocation_id) gid: vec3u) {
     b = rgb_new.b;
   }
 
-  // 6. Sharpening (3×3 Laplacian unsharp mask)
+  // 6. Sharpening (luminance-based Laplacian USM)
   if (develop.sharpening != 0.0) {
-    // Sample neighbors from dev_input (pre-develop, so we sharpen structure)
     let pN = textureLoad(dev_input, coords + vec2i(0, -1), 0);
     let pS = textureLoad(dev_input, coords + vec2i(0, 1), 0);
     let pW = textureLoad(dev_input, coords + vec2i(-1, 0), 0);
     let pE = textureLoad(dev_input, coords + vec2i(1, 0), 0);
 
-    // Luminance-based sharpening to avoid color fringing
     let lum_c = 0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b;
     let lum_n = 0.299 * pN.r + 0.587 * pN.g + 0.114 * pN.b;
     let lum_s = 0.299 * pS.r + 0.587 * pS.g + 0.114 * pS.b;
@@ -329,15 +328,11 @@ fn develop_image(@builtin(global_invocation_id) gid: vec3u) {
   // 7. Vignette
   if (develop.vignette != 0.0) {
     let uv = vec2f(f32(gid.x) / f32(dims.x), f32(gid.y) / f32(dims.y));
-    let center = vec2f(0.5, 0.5);
-    let dist = length(uv - center) * 1.414; // normalize to [0,1] at corners
+    let dist = length(uv - vec2f(0.5, 0.5)) * 1.414;
     let vig = 1.0 - develop.vignette * dist * dist;
-    r *= vig;
-    g *= vig;
-    b *= vig;
-    r = clamp(r, 0.0, 1.0);
-    g = clamp(g, 0.0, 1.0);
-    b = clamp(b, 0.0, 1.0);
+    r = clamp(r * vig, 0.0, 1.0);
+    g = clamp(g * vig, 0.0, 1.0);
+    b = clamp(b * vig, 0.0, 1.0);
   }
 
   // 8. sRGB gamma

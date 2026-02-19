@@ -16,7 +16,8 @@ use wasm_bindgen::prelude::*;
 ///   Bytes 8..12:  CFA pattern (u32 LE, encoded as 4 color indices packed)
 ///   Bytes 12..20: black levels (4 × u16 LE)
 ///   Bytes 20..28: white levels (4 × u16 LE)
-///   Bytes 28..:   raw sensor data (u16 LE per pixel)
+///   Bytes 28..44: white balance coefficients (4 × f32 LE, RGBE order)
+///   Bytes 44..:   raw sensor data (u16 LE per pixel)
 ///
 /// The GPU will handle demosaicing, normalization, and color processing.
 #[wasm_bindgen]
@@ -44,9 +45,12 @@ pub fn decode_raw(data: &[u8]) -> Result<Vec<u8>, JsValue> {
         }
     };
 
-    // Header: 28 bytes
+    // WB coefficients from camera metadata (RGBE order)
+    let wb = raw_image.wb_coeffs;
+
+    // Header: 44 bytes (was 28, added 16 bytes for WB)
     // Data: width * height * 2 bytes (u16 per pixel)
-    let header_size = 28;
+    let header_size = 44;
     let data_size = raw_u16.len() * 2;
     let mut result = Vec::with_capacity(header_size + data_size);
 
@@ -60,8 +64,12 @@ pub fn decode_raw(data: &[u8]) -> Result<Vec<u8>, JsValue> {
     for &w in &raw_image.whitelevels {
         result.extend_from_slice(&w.to_le_bytes());
     }
+    // WB coefficients (4 × f32 LE)
+    for &c in &wb {
+        result.extend_from_slice(&c.to_le_bytes());
+    }
 
-    // Write raw u16 data as little-endian bytes (zero-copy via bytecast)
+    // Write raw u16 data as little-endian bytes
     // Safety: u16 → [u8; 2] is always valid LE on WASM (little-endian)
     let raw_bytes: &[u8] =
         unsafe { std::slice::from_raw_parts(raw_u16.as_ptr() as *const u8, raw_u16.len() * 2) };

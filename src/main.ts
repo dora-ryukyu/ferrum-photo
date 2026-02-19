@@ -3,14 +3,15 @@
 //
 // Pipeline: RAW file → WASM parse → GPU demosaic → develop → render
 // Phase 4: MHC demosaic, vibrance/sat/sharpen/vignette,
-//          File System Access API, presets, histogram fix
+//          File System Access API, presets, histogram fix,
+//          camera WB defaults, rotation
 // ============================================================
 
 import "./style.css";
 import shaderSource from "./shaders.wgsl?raw";
-import { decode_raw } from "./wasm/ferrum_photo_core.js";
+import initWasm, { decode_raw } from "./wasm/ferrum_photo_core.js";
 
-console.log("✓ WASM module loaded");
+console.log("✓ WASM module imported");
 
 const RAW_EXTENSIONS = new Set([
   "cr2", "cr3", "nef", "nrw", "arw", "srf", "sr2",
@@ -97,6 +98,13 @@ let panStartY = 0;
 // Before/After
 let showBefore = false;
 
+// Rotation (CSS-only, 0/90/180/270)
+let rotationDeg = 0;
+
+// Camera WB default (updated per-file for RAW)
+let defaultWBKelvin = 6500;
+let cameraWB = { r: 1, g: 1, b: 1 }; // exact camera WB coefficients
+
 // ─── DOM ─────────────────────────────────────────────────────
 
 const canvas = document.getElementById("viewport") as HTMLCanvasElement;
@@ -144,11 +152,22 @@ const btnReset = document.getElementById("btn-reset")!;
 const btnBeforeAfter = document.getElementById("btn-before-after")!;
 const btnPresetSave = document.getElementById("btn-preset-save")!;
 const btnPresetLoad = document.getElementById("btn-preset-load")!;
+const btnRotateLeft = document.getElementById("btn-rotate-left")!;
+const btnRotateRight = document.getElementById("btn-rotate-right")!;
 
 // ─── Entry ───────────────────────────────────────────────────
 
 async function main() {
-  badgeWasm.classList.add("active");
+  // Initialize WASM module (required for wasm-pack --target web)
+  try {
+    await initWasm();
+    badgeWasm.classList.add("active");
+    console.log("✓ WASM initialized");
+  } catch (e) {
+    console.error("WASM init failed:", e);
+    showError("Failed to initialize WASM module.");
+    return;
+  }
   if (crossOriginIsolated) badgeCOI.classList.add("active");
 
   try {
@@ -192,6 +211,8 @@ async function main() {
   btnExport.addEventListener("click", showExportModal);
   btnPresetSave.addEventListener("click", savePreset);
   btnPresetLoad.addEventListener("click", loadPreset);
+  btnRotateLeft.addEventListener("click", () => rotate(-90));
+  btnRotateRight.addEventListener("click", () => rotate(90));
 
   // Drag & drop
   viewportContainer.addEventListener("dragover", (e) => {
@@ -318,7 +339,6 @@ async function initWebGPU(): Promise<GPUState> {
 // ─── File Loading ────────────────────────────────────────────
 
 async function openFile() {
-  // Use File System Access API if available
   if ("showOpenFilePicker" in window) {
     try {
       const [handle] = await (window as any).showOpenFilePicker({
@@ -352,28 +372,43 @@ async function loadFile(file: File) {
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
     const isRaw = RAW_EXTENSIONS.has(ext);
 
+    // Reset rotation for new file
+    rotationDeg = 0;
+
     if (isRaw) {
       console.log(`RAW file detected (.${ext}), parsing via WASM…`);
       const arrayBuf = await file.arrayBuffer();
       const result = decode_raw(new Uint8Array(arrayBuf));
 
-      const headerBuf = new ArrayBuffer(28);
-      new Uint8Array(headerBuf).set(result.slice(0, 28));
+      // Header: 44 bytes (width u32, height u32, cfa u32,
+      //   blacks 4×u16, whites 4×u16, wb_coeffs 4×f32)
+      const headerBuf = new ArrayBuffer(44);
+      new Uint8Array(headerBuf).set(result.slice(0, 44));
       const hdr = new DataView(headerBuf);
       const width = hdr.getUint32(0, true);
       const height = hdr.getUint32(4, true);
       const cfaPattern = hdr.getUint32(8, true);
       const blacks = [hdr.getUint16(12, true), hdr.getUint16(14, true), hdr.getUint16(16, true), hdr.getUint16(18, true)];
       const whites = [hdr.getUint16(20, true), hdr.getUint16(22, true), hdr.getUint16(24, true), hdr.getUint16(26, true)];
+      const wb_coeffs = [hdr.getFloat32(28, true), hdr.getFloat32(32, true), hdr.getFloat32(36, true), hdr.getFloat32(40, true)];
 
-      const rawBytes = result.slice(28);
+      const rawBytes = result.slice(44);
       const parseTime = performance.now() - t0;
       console.log(`RAW parsed: ${width}×${height} in ${parseTime.toFixed(0)}ms`);
+      console.log(`Camera WB coeffs (RGBE): [${wb_coeffs.map(c => c.toFixed(4)).join(", ")}]`);
+
+      // Apply camera WB as default
+      applyCameraWB(wb_coeffs);
 
       uploadRawToGPU(rawBytes, width, height, cfaPattern, blacks, whites);
     } else {
       const blob = new Blob([file], { type: file.type || "image/jpeg" });
       const bitmap = await createImageBitmap(blob);
+      // Reset WB to neutral for non-RAW
+      defaultWBKelvin = 6500;
+      cameraWB = { r: 1, g: 1, b: 1 };
+      sliders.wb.value = "6500";
+      updateDevelop();
       uploadBitmapToGPU(bitmap);
       bitmap.close();
     }
@@ -395,6 +430,60 @@ async function loadFile(file: File) {
     console.error("Failed to load:", e);
     showError(`Failed to load ${file.name}: ${(e as Error).message}`);
   }
+}
+
+// ─── Camera WB ───────────────────────────────────────────────
+
+function applyCameraWB(wb_coeffs: number[]) {
+  // wb_coeffs is in RGBE order from rawloader
+  // Normalize to green channel (most common approach)
+  const [r, g, b] = wb_coeffs;
+  if (r <= 0 || g <= 0 || b <= 0) {
+    // Invalid WB data, use neutral
+    console.log("Invalid WB coefficients, using neutral");
+    develop.wb_r = 1;
+    develop.wb_g = 1;
+    develop.wb_b = 1;
+    sliders.wb.value = "6500";
+    return;
+  }
+
+  // Normalize so that green = 1
+  develop.wb_r = r / g;
+  develop.wb_g = 1;
+  develop.wb_b = b / g;
+
+  // Find approximate Kelvin that best matches R/B ratio
+  // (this is approximate, just for the slider display)
+  const targetRatio = develop.wb_r / develop.wb_b;
+  let bestK = 6500;
+  let bestDiff = Infinity;
+  for (let k = 2000; k <= 12000; k += 50) {
+    const rgb = kelvinToRGB(k);
+    const ratio = rgb.r / rgb.b;
+    const diff = Math.abs(ratio - targetRatio);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestK = k;
+    }
+  }
+  sliders.wb.value = String(bestK);
+  defaultWBKelvin = bestK;
+  cameraWB = { r: develop.wb_r, g: develop.wb_g, b: develop.wb_b };
+
+  console.log(`Camera WB applied: R=${develop.wb_r.toFixed(3)}, G=1.000, B=${develop.wb_b.toFixed(3)} ≈ ${bestK}K`);
+
+  // Now update display values (but don't override wb_r/wb_g/wb_b with kelvin approximation)
+  const fmtSigned = (v: number) => (v >= 0 ? "+" : "") + v.toFixed(2);
+  valueEls.exposure.textContent = fmtSigned(develop.exposure);
+  valueEls.contrast.textContent = fmtSigned(develop.contrast);
+  valueEls.highlights.textContent = fmtSigned(develop.highlights);
+  valueEls.shadows.textContent = fmtSigned(develop.shadows);
+  valueEls.vibrance.textContent = fmtSigned(develop.vibrance);
+  valueEls.saturation.textContent = fmtSigned(develop.saturation);
+  valueEls.sharpening.textContent = develop.sharpening.toFixed(2);
+  valueEls.vignette.textContent = fmtSigned(develop.vignette);
+  valueEls.wb.textContent = `${bestK}K`;
 }
 
 // ─── GPU Upload: Standard Images ─────────────────────────────
@@ -628,7 +717,6 @@ function doRender() {
 
   device.queue.submit([encoder.finish()]);
 
-  // Schedule histogram after GPU work completes
   scheduleHistogramUpdate();
 }
 
@@ -645,10 +733,13 @@ function updateDevelop() {
   develop.vignette = parseFloat(sliders.vignette?.value ?? "0");
 
   const kelvin = parseFloat(sliders.wb?.value ?? "6500");
-  const wb = kelvinToRGB(kelvin);
-  develop.wb_r = wb.r;
-  develop.wb_g = wb.g;
-  develop.wb_b = wb.b;
+  // Compute WB as relative adjustment from camera WB
+  // At defaultWBKelvin → exact camera WB; moving slider applies proportional shift
+  const sliderRGB = kelvinToRGB(kelvin);
+  const defaultRGB = kelvinToRGB(defaultWBKelvin);
+  develop.wb_r = cameraWB.r * (sliderRGB.r / defaultRGB.r);
+  develop.wb_g = cameraWB.g * (sliderRGB.g / defaultRGB.g);
+  develop.wb_b = cameraWB.b * (sliderRGB.b / defaultRGB.b);
 
   // Update value displays
   const fmtSigned = (v: number) => (v >= 0 ? "+" : "") + v.toFixed(2);
@@ -670,11 +761,13 @@ function resetAll() {
   sliders.contrast.value = "0";
   sliders.highlights.value = "0";
   sliders.shadows.value = "0";
-  sliders.wb.value = "6500";
+  sliders.wb.value = String(defaultWBKelvin);
   sliders.vibrance.value = "0";
   sliders.saturation.value = "0";
   sliders.sharpening.value = "0";
   sliders.vignette.value = "0";
+  rotationDeg = 0;
+  applyTransform();
   updateDevelop();
 }
 
@@ -698,16 +791,35 @@ function toggleBeforeAfter() {
   render();
 }
 
+// ─── Rotation ────────────────────────────────────────────────
+
+function rotate(delta: number) {
+  if (!img) return;
+  rotationDeg = ((rotationDeg + delta) % 360 + 360) % 360;
+  applyTransform();
+}
+
 // ─── Zoom & Pan ──────────────────────────────────────────────
 
 function getContainerSize() {
   return { cw: viewportContainer.clientWidth, ch: viewportContainer.clientHeight };
 }
 
+function getDisplayDimensions(): { dw: number; dh: number } {
+  if (!img) return { dw: 0, dh: 0 };
+  // When rotated 90/270, effective dimensions swap
+  const isRotated = rotationDeg === 90 || rotationDeg === 270;
+  return {
+    dw: isRotated ? img.height : img.width,
+    dh: isRotated ? img.width : img.height,
+  };
+}
+
 function getFitScale(): number {
   if (!img) return 1;
   const { cw, ch } = getContainerSize();
-  return Math.min(cw / img.width, ch / img.height, 1);
+  const { dw, dh } = getDisplayDimensions();
+  return Math.min(cw / dw, ch / dh, 1);
 }
 
 function fitZoom() {
@@ -746,8 +858,9 @@ function clampPan() {
   if (!img) return;
   const scale = zoomLevel === 0 ? getFitScale() : zoomLevel;
   const { cw, ch } = getContainerSize();
-  const imgW = img.width * scale;
-  const imgH = img.height * scale;
+  const { dw, dh } = getDisplayDimensions();
+  const imgW = dw * scale;
+  const imgH = dh * scale;
   const maxPanX = Math.max(0, (imgW - cw) / 2);
   const maxPanY = Math.max(0, (imgH - ch) / 2);
   panX = Math.max(-maxPanX, Math.min(maxPanX, panX));
@@ -757,7 +870,7 @@ function clampPan() {
 function applyTransform() {
   if (!img) return;
   const scale = zoomLevel === 0 ? getFitScale() : zoomLevel;
-  canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+  canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale}) rotate(${rotationDeg}deg)`;
   canvas.style.maxWidth = "none";
   canvas.style.maxHeight = "none";
   canvas.style.width = `${img.width}px`;
@@ -813,7 +926,6 @@ let histogramPending = false;
 function scheduleHistogramUpdate() {
   if (histogramPending) return;
   histogramPending = true;
-  // Wait for GPU to finish, then read pixels
   if (gpu) {
     gpu.device.queue.onSubmittedWorkDone().then(() => {
       histogramPending = false;
@@ -826,7 +938,6 @@ async function readAndDrawHistogram() {
   if (!gpu || !img) return;
 
   try {
-    // createImageBitmap on a WebGPU canvas after onSubmittedWorkDone
     const bitmap = await createImageBitmap(canvas);
     const sw = Math.min(512, img.width);
     const sh = Math.round(sw * (img.height / img.width));
@@ -900,6 +1011,9 @@ function drawHistogram(data: Uint8ClampedArray | null) {
 function showExportModal() {
   if (!img) return;
 
+  // Calculate export dimensions (including rotation)
+  const { dw, dh } = getDisplayDimensions();
+
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
   backdrop.innerHTML = `
@@ -921,7 +1035,7 @@ function showExportModal() {
       </div>
       <div class="modal-row">
         <label>Size</label>
-        <span style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);">${img.width}×${img.height}</span>
+        <span style="font-family:var(--font-mono);font-size:12px;color:var(--text-secondary);">${dw}×${dh}${rotationDeg !== 0 ? ` (${rotationDeg}°)` : ""}</span>
       </div>
       <div class="modal-actions">
         <button class="btn-modal btn-modal-cancel" id="export-cancel">Cancel</button>
@@ -960,19 +1074,26 @@ async function doExport(format: "jpeg" | "png", quality: number) {
   showLoading("Exporting…");
 
   try {
-    // Wait for GPU to finish
     await gpu.device.queue.onSubmittedWorkDone();
 
     const bitmap = await createImageBitmap(canvas);
-    const offscreen = new OffscreenCanvas(img.width, img.height);
+    const { dw, dh } = getDisplayDimensions();
+    const offscreen = new OffscreenCanvas(dw, dh);
     const ctx2d = offscreen.getContext("2d")!;
-    ctx2d.drawImage(bitmap, 0, 0, img.width, img.height);
+
+    // Apply rotation to the export canvas
+    if (rotationDeg !== 0) {
+      ctx2d.translate(dw / 2, dh / 2);
+      ctx2d.rotate((rotationDeg * Math.PI) / 180);
+      ctx2d.drawImage(bitmap, -img.width / 2, -img.height / 2, img.width, img.height);
+    } else {
+      ctx2d.drawImage(bitmap, 0, 0, img.width, img.height);
+    }
     bitmap.close();
 
     const mimeType = format === "png" ? "image/png" : "image/jpeg";
     const blob = await offscreen.convertToBlob({ type: mimeType, quality: format === "jpeg" ? quality : undefined });
 
-    // Try File System Access API for saving
     if ("showSaveFilePicker" in window) {
       try {
         const ext = format === "png" ? "png" : "jpg";
@@ -989,11 +1110,10 @@ async function doExport(format: "jpeg" | "png", quality: number) {
         hideLoading();
         return;
       } catch {
-        // User cancelled save picker, fall through to download
+        // User cancelled
       }
     }
 
-    // Fallback: download via link
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1067,7 +1187,6 @@ async function applyPresetFile(file: File) {
       return;
     }
 
-    // Apply settings to sliders
     const s = preset.settings;
     sliders.exposure.value = String(s.exposure ?? 0);
     sliders.contrast.value = String(s.contrast ?? 0);
@@ -1078,11 +1197,9 @@ async function applyPresetFile(file: File) {
     sliders.sharpening.value = String(s.sharpening ?? 0);
     sliders.vignette.value = String(s.vignette ?? 0);
 
-    // Reverse kelvin from wb_r/wb_b (approximate: use 6500 if neutral)
     if (s.wb_r === 1 && s.wb_g === 1 && s.wb_b === 1) {
       sliders.wb.value = "6500";
     }
-    // Otherwise keep current WB slider — preset stores computed multipliers
 
     updateDevelop();
     console.log(`Preset loaded: ${preset.name}`);
@@ -1100,6 +1217,8 @@ function onKeyDown(e: KeyboardEvent) {
   else if (e.key === "1") { setZoom(1); }
   else if (e.key === "2") { setZoom(2); }
   else if (e.key === "\\") { toggleBeforeAfter(); }
+  else if (e.key === "l" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { rotate(-90); }
+  else if (e.key === "L" && !e.ctrlKey && !e.metaKey && e.shiftKey) { rotate(90); }
   else if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey) { resetAll(); }
   else if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); if (img) showExportModal(); }
   else if ((e.ctrlKey || e.metaKey) && e.key === "o") { e.preventDefault(); openFile(); }
