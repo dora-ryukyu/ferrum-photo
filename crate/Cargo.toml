@@ -1,0 +1,22 @@
+[package]
+name = "ferrum-photo-core"
+version = "0.1.0"
+edition = "2021"
+description = "WASM core for ferrum-photo: RAW image decoding and processing"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+rawloader = { version = "0.37", default-features = false }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Os"]

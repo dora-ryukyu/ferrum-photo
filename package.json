@@ -1,0 +1,25 @@
+{
+  "name": "ferrum-photo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-native RAW photo editor powered by WebGPU and WASM",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "wasm:build": "cd crate && wasm-pack build --target bundler --release --out-dir ../src/wasm"
+  },
+  "dependencies": {
+    "coi-serviceworker": "^0.1.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@webgpu/types": "^0.1.69",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.1.0",
+    "vite-plugin-top-level-await": "^1.4.4",
+    "vite-plugin-wasm": "^3.4.1"
+  }
+}
