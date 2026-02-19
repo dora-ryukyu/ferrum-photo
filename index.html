@@ -44,25 +44,41 @@
   <div id="app">
     <!-- Header -->
     <header id="header">
-      <div class="header-brand">
-        <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="16" cy="16" r="14" stroke="url(#logoGrad)" stroke-width="2.5" />
-          <path d="M16 6 L16 26 M6 16 L26 16 M9.5 9.5 L22.5 22.5 M22.5 9.5 L9.5 22.5" stroke="url(#logoGrad)"
-            stroke-width="1.2" opacity="0.5" />
-          <circle cx="16" cy="16" r="5" fill="url(#logoGrad)" />
-          <defs>
-            <linearGradient id="logoGrad" x1="0" y1="0" x2="32" y2="32">
-              <stop offset="0%" stop-color="#f97316" />
-              <stop offset="100%" stop-color="#ef4444" />
-            </linearGradient>
-          </defs>
-        </svg>
-        <h1 class="logo-text">ferrum<span class="logo-accent">-photo</span></h1>
+      <div class="header-left">
+        <div class="header-brand">
+          <svg class="logo-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="16" cy="16" r="14" stroke="url(#logoGrad)" stroke-width="2.5" />
+            <path d="M16 6 L16 26 M6 16 L26 16 M9.5 9.5 L22.5 22.5 M22.5 9.5 L9.5 22.5" stroke="url(#logoGrad)"
+              stroke-width="1.2" opacity="0.5" />
+            <circle cx="16" cy="16" r="5" fill="url(#logoGrad)" />
+            <defs>
+              <linearGradient id="logoGrad" x1="0" y1="0" x2="32" y2="32">
+                <stop offset="0%" stop-color="#f97316" />
+                <stop offset="100%" stop-color="#ef4444" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <h1 class="logo-text">ferrum<span class="logo-accent">-photo</span></h1>
+        </div>
+        <div class="header-badges">
+          <span class="badge badge-webgpu" id="badge-webgpu">WebGPU</span>
+          <span class="badge badge-wasm" id="badge-wasm">WASM</span>
+          <span class="badge badge-coi" id="badge-coi">COI</span>
+        </div>
       </div>
-      <div class="header-badges">
-        <span class="badge badge-webgpu" id="badge-webgpu">WebGPU</span>
-        <span class="badge badge-wasm" id="badge-wasm">WASM</span>
-        <span class="badge badge-coi" id="badge-coi">COI</span>
+      <div class="header-actions">
+        <button class="btn-header" id="btn-open" title="Open file (Ctrl+O)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M5 19V5a2 2 0 012-2h5l2 2h5a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2z" />
+          </svg>
+          Open
+        </button>
+        <button class="btn-header btn-export" id="btn-export" title="Export (Ctrl+S)" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          </svg>
+          Export
+        </button>
       </div>
     </header>
 
@@ -87,19 +103,42 @@
         </div>
         <div id="viewport-status" class="hidden">
           <span id="image-info"></span>
+          <span class="status-sep">•</span>
+          <span id="zoom-level">Fit</span>
         </div>
       </section>
 
       <!-- Control panel -->
       <aside id="controls">
         <div class="panel">
-          <h2 class="panel-title">
-            <svg viewBox="0 0 20 20" fill="currentColor" class="panel-icon">
-              <path
-                d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.141-.985a1 1 0 011.32.083l.7.7a1 1 0 01.083 1.32l-.985 1.141L18.795 13a1 1 0 01-.553.894l-1.287.644a1 1 0 01-.447.106H13v2a1 1 0 01-1 1h-2a1 1 0 01-1-1v-2H3.492a1 1 0 01-.447-.106l-1.287-.644A1 1 0 011.205 13l1.582-3.954-.985-1.141a1 1 0 01.083-1.32l.7-.7a1 1 0 011.32-.083l1.141.985L9 5.323V3a1 1 0 011-1z" />
-            </svg>
-            Develop
-          </h2>
+          <div class="panel-header-row">
+            <h2 class="panel-title">
+              <svg viewBox="0 0 20 20" fill="currentColor" class="panel-icon">
+                <path
+                  d="M10 2a1 1 0 011 1v1.323l3.954 1.582 1.141-.985a1 1 0 011.32.083l.7.7a1 1 0 01.083 1.32l-.985 1.141L18.795 13a1 1 0 01-.553.894l-1.287.644a1 1 0 01-.447.106H13v2a1 1 0 01-1 1h-2a1 1 0 01-1-1v-2H3.492a1 1 0 01-.447-.106l-1.287-.644A1 1 0 011.205 13l1.582-3.954-.985-1.141a1 1 0 01.083-1.32l.7-.7a1 1 0 011.32-.083l1.141.985L9 5.323V3a1 1 0 011-1z" />
+              </svg>
+              Develop
+            </h2>
+            <div class="panel-actions">
+              <button class="btn-icon" id="btn-before-after" title="Before/After (\\)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <line x1="12" y1="3" x2="12" y2="21" />
+                </svg>
+              </button>
+              <button class="btn-icon" id="btn-reset" title="Reset All (R)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 4v6h6M23 20v-6h-6" />
+                  <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Histogram -->
+          <div class="histogram-container">
+            <canvas id="histogram" width="248" height="64"></canvas>
+          </div>
 
           <div class="control-group">
             <div class="control-header">
@@ -111,6 +150,109 @@
               <span>-3</span>
               <span>+3</span>
             </div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="wb-slider">White Balance</label>
+              <span class="control-value" id="wb-value">6500K</span>
+            </div>
+            <input type="range" id="wb-slider" min="2000" max="12000" step="100" value="6500" class="slider" />
+            <div class="slider-labels"><span>2000K</span><span>12000K</span></div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="contrast-slider">Contrast</label>
+              <span class="control-value" id="contrast-value">0.00</span>
+            </div>
+            <input type="range" id="contrast-slider" min="-1" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>-1</span><span>+1</span></div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="highlights-slider">Highlights</label>
+              <span class="control-value" id="highlights-value">0.00</span>
+            </div>
+            <input type="range" id="highlights-slider" min="-1" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>-1</span><span>+1</span></div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="shadows-slider">Shadows</label>
+              <span class="control-value" id="shadows-value">0.00</span>
+            </div>
+            <input type="range" id="shadows-slider" min="-1" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>-1</span><span>+1</span></div>
+          </div>
+
+          <div class="control-divider"></div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="vibrance-slider">Vibrance</label>
+              <span class="control-value" id="vibrance-value">0.00</span>
+            </div>
+            <input type="range" id="vibrance-slider" min="-1" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>-1</span><span>+1</span></div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="saturation-slider">Saturation</label>
+              <span class="control-value" id="saturation-value">0.00</span>
+            </div>
+            <input type="range" id="saturation-slider" min="-1" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>-1</span><span>+1</span></div>
+          </div>
+
+          <div class="control-divider"></div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="sharpening-slider">Sharpening</label>
+              <span class="control-value" id="sharpening-value">0.00</span>
+            </div>
+            <input type="range" id="sharpening-slider" min="0" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>0</span><span>1</span></div>
+          </div>
+
+          <div class="control-group">
+            <div class="control-header">
+              <label for="vignette-slider">Vignette</label>
+              <span class="control-value" id="vignette-value">0.00</span>
+            </div>
+            <input type="range" id="vignette-slider" min="-1" max="1" step="0.01" value="0" class="slider" />
+            <div class="slider-labels"><span>Lighten</span><span>Darken</span></div>
+          </div>
+        </div>
+
+        <!-- Presets -->
+        <div class="panel">
+          <h2 class="panel-title">
+            <svg viewBox="0 0 20 20" fill="currentColor" class="panel-icon">
+              <path
+                d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" />
+            </svg>
+            Presets
+          </h2>
+          <div class="preset-actions">
+            <button class="btn-preset" id="btn-preset-save" title="Save current settings as preset">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
+                <polyline points="17,21 17,13 7,13 7,21" />
+                <polyline points="7,3 7,8 15,8" />
+              </svg>
+              Save Preset
+            </button>
+            <button class="btn-preset" id="btn-preset-load" title="Load preset from file">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 19V5a2 2 0 012-2h5l2 2h5a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2z" />
+              </svg>
+              Load Preset
+            </button>
           </div>
         </div>
 
@@ -126,8 +268,8 @@
           </h2>
           <div class="future-items">
             <span class="future-chip">AI Denoise</span>
-            <span class="future-chip">White Balance</span>
             <span class="future-chip">Tone Curve</span>
+            <span class="future-chip">HSL Mixer</span>
             <span class="future-chip">WGSL Plugins</span>
           </div>
         </div>
