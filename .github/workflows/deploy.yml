@@ -33,7 +33,7 @@ jobs:
 
       - name: Build WASM
         working-directory: ./crate
-        run: wasm-pack build --target bundler --release --out-dir ../src/wasm
+        run: wasm-pack build --target web --release --out-dir ../src/wasm
 
       - name: Setup Node
         uses: actions/setup-node@v4

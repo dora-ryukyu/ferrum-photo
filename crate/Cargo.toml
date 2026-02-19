@@ -19,4 +19,4 @@ lto = true
 strip = "debuginfo"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-Os"]
+wasm-opt = false
