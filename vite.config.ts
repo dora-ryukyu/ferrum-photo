@@ -4,6 +4,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  base: "./",
   plugins: [
     wasm(),
     topLevelAwait(),
